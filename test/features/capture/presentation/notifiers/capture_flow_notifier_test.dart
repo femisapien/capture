@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:capture/core/data/reminders/reminder_datasource.dart';
 import 'package:capture/core/domain/entities/notion_workspace.dart';
 import 'package:capture/core/services/native_event.dart';
 import 'package:capture/core/services/native_platform_service.dart';
@@ -9,6 +10,7 @@ import 'package:capture/features/capture/domain/capture_limits.dart';
 import 'package:capture/features/capture/domain/entities/capture_failure.dart';
 import 'package:capture/features/capture/domain/entities/capture_record.dart';
 import 'package:capture/features/capture/domain/entities/capture_stage.dart';
+import 'package:capture/features/capture/domain/entities/proposal_item.dart';
 import 'package:capture/features/capture/presentation/notifiers/capture_flow_notifier.dart';
 import 'package:capture/features/capture/presentation/notifiers/capture_notice.dart';
 import 'package:capture/features/capture/presentation/notifiers/capture_phase.dart';
@@ -17,9 +19,13 @@ import 'package:capture/features/capture/repositories/capture_save_repository.da
 import 'package:capture/features/library/repositories/library_repository.dart';
 import 'package:capture/features/settings/presentation/notifiers/settings_notifier.dart';
 import 'package:capture/features/settings/presentation/notifiers/settings_state.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
 
 import '../../../../helpers/app_harness.dart';
 import '../../../../helpers/test_fakes.dart';
@@ -33,30 +39,22 @@ final _workspace = NotionWorkspace(
   maxUpload: .fromBytes(1),
 );
 
-class _Connected extends SettingsNotifier {
-  @override
-  SettingsState build() => super.build().copyWith(workspace: _workspace, hasNotionToken: true);
-}
+SettingsState _connected(Ref ref, SettingsNotifier notifier) =>
+    notifier.build().copyWith(workspace: _workspace, hasNotionToken: true);
 
 /// Connected, with auto-save turned on.
-class _AutoSave extends _Connected {
-  @override
-  SettingsState build() => super.build().copyWith(autoSave: true);
-}
+SettingsState _autoSave(Ref ref, SettingsNotifier notifier) =>
+    _connected(ref, notifier).copyWith(autoSave: true);
 
 /// Key, Notion and speech model all in place, so a capture can start.
-class _Ready extends SettingsNotifier {
-  @override
-  SettingsState build() => super.build().copyWith(
-    workspace: _workspace,
-    hasNotionToken: true,
-    hasTypesafeKey: true,
-    modelReady: true,
-  );
-}
+SettingsState _ready(Ref ref, SettingsNotifier notifier) => notifier.build().copyWith(
+  workspace: _workspace,
+  hasNotionToken: true,
+  hasTypesafeKey: true,
+  modelReady: true,
+);
 
-/// Notion confirms every step at once; reminders wait on [prompt], like an
-/// unanswered macOS notification prompt.
+/// Keep reminders waiting on [prompt] to reproduce an unanswered macOS notification prompt.
 class _Saver implements ICaptureSaveRepository {
   _Saver({this.failure});
 
@@ -83,12 +81,11 @@ class _Saver implements ICaptureSaveRepository {
 
 class _MockLibrary extends Mock implements ILibraryRepository {}
 
-/// The real flow and on-disk store, connected to Notion, with [saver]; with
-/// [native] as the Mac side and every setup step done when it is given.
 ProviderContainer _container(
-  _Saver saver, {
+  _Saver? saver, {
   INativePlatformService? native,
-  SettingsNotifier Function()? settings,
+  IReminderDatasource? reminders,
+  SettingsState Function(Ref ref, SettingsNotifier notifier)? settings,
   ITranscriptionDatasource? transcription,
 }) {
   final support = Directory.systemTemp.createTempSync('capture_flow_test');
@@ -98,17 +95,20 @@ ProviderContainer _container(
   when(() => library.refresh(any())).thenAnswer((_) async => const .ok([]));
   return .test(
     overrides: [
-      ...appOverrides(support: support, native: native ?? stubNative()),
-      settingsProvider.overrideWith(settings ?? (native == null ? _Connected.new : _Ready.new)),
-      captureSaveRepositoryProvider.overrideWithValue(saver),
+      ...appOverrides(
+        support: support,
+        native: native ?? stubNative(),
+        fakes: (secrets: null, reminders: reminders, system: null),
+      ),
+      settingsProvider.overrideWithBuild(settings ?? (native == null ? _connected : _ready)),
+      if (saver != null) captureSaveRepositoryProvider.overrideWithValue(saver),
       libraryRepositoryProvider.overrideWithValue(library),
       if (transcription != null) transcriptionDatasourceProvider.overrideWithValue(transcription),
     ],
   );
 }
 
-/// Completes once the flow reaches [phase]. A start writes its draft to disk,
-/// which draining the event queue does not wait for.
+/// Disk draft creation outlives event-queue draining, so wait for the actual phase.
 Future<void> _reach(ProviderContainer container, CapturePhase phase) async {
   final reached = Completer<void>();
   final subscription = container.listen(captureFlowProvider.select((state) => state.phase), (
@@ -158,6 +158,7 @@ CaptureRecord _proposal(String id, {String? groupId = 'g', CaptureFailure? failu
     );
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() {
     registerFallbackValue(_workspace);
     registerFallbackValue(Duration.zero);
@@ -184,7 +185,7 @@ void main() {
   group('with auto-save on', () {
     test('a proposal with nothing to decide is saved without the review card', () async {
       final saver = _Saver()..prompt.complete(true);
-      final container = _container(saver, settings: _AutoSave.new);
+      final container = _container(saver, settings: _autoSave);
       container.read(captureRepositoryProvider).put(_proposal('c1'));
 
       await container.read(captureFlowProvider.notifier).process('c1');
@@ -205,7 +206,7 @@ void main() {
     };
     for (final MapEntry(key: reason, value: record) in needsLook.entries) {
       test('the review card still opens when $reason', () async {
-        final container = _container(.new(), settings: _AutoSave.new);
+        final container = _container(.new(), settings: _autoSave);
         container.read(captureRepositoryProvider).put(record);
 
         await container.read(captureFlowProvider.notifier).process('c1');
@@ -221,7 +222,7 @@ void main() {
     }
 
     test('a failed save reopens the review card to retry', () async {
-      final container = _container(.new(failure: .notionUnavailable), settings: _AutoSave.new);
+      final container = _container(.new(failure: .notionUnavailable), settings: _autoSave);
       container.read(captureRepositoryProvider).put(_proposal('c1'));
 
       await container.read(captureFlowProvider.notifier).process('c1');
@@ -256,6 +257,102 @@ void main() {
     await container.read(captureFlowProvider.notifier).resumeReminders();
 
     expect(saver.reminded, equals(['saved']));
+  });
+
+  test('a native reminder failure keeps owed work and continues later captures', () async {
+    tzdata.initializeTimeZones();
+    final previousPlatform = debugDefaultTargetPlatformOverride;
+    debugDefaultTargetPlatformOverride = .iOS;
+    IOSFlutterLocalNotificationsPlugin.registerWith();
+    const channel = MethodChannel('dexterous.com/flutter/local_notifications');
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    addTearDown(() {
+      messenger.setMockMethodCallHandler(channel, null);
+      debugDefaultTargetPlatformOverride = previousPlatform;
+    });
+    final attempted = <String>[];
+    bool refuseFirst = true;
+    bool permissionGranted = true;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'initialize') return true;
+      if (call.method == 'requestPermissions') return permissionGranted;
+      if (call.method != 'zonedSchedule') fail('Unexpected notification call: ${call.method}');
+      final (id: item, :title) = switch (call.arguments) {
+        {'payload': final String id, 'title': final Object? title} => (id: id, title: title),
+        _ => fail('A scheduled reminder must identify its item and title'),
+      };
+      if (item == 'later-reminder') expect(title, isNull);
+      attempted.add(item);
+      if (item == 'failed-reminder' && refuseFirst) {
+        throw PlatformException(code: 'schedule_failed');
+      }
+      return null;
+    });
+    final container = _container(
+      null,
+      reminders: LocalNotificationsReminderDatasource(FlutterLocalNotificationsPlugin()),
+    );
+    final task = ProposalItem(
+      id: .new('failed-reminder'),
+      sources: [],
+      kind: .task,
+      groupId: .new('g'),
+      title: 'A reminder',
+      body: '',
+      reminder: const .new(2100, 1, 1, hour: 9, minute: 0),
+    );
+    final failedRecord = _record('failed', .saved).copyWith(
+      capturedAtUtc: FakeSystem.now.add(const .new(minutes: 1)),
+      progress: .new(remindersScheduled: {.new('confirmed')}),
+      items: [
+        task,
+        task.copyWith(id: .new('confirmed')),
+      ],
+    );
+    final laterRecord = failedRecord.copyWith(
+      id: .new('later'),
+      capturedAtUtc: FakeSystem.now,
+      progress: const .new(),
+      items: [task.copyWith(id: .new('later-reminder'), title: null)],
+    );
+    final captures = container.read(captureRepositoryProvider)
+      ..put(failedRecord)
+      ..put(laterRecord);
+    final notifier = container.read(captureFlowProvider.notifier);
+
+    await expectLater(notifier.resumeReminders(), completes);
+
+    expect(attempted, equals(['failed-reminder', 'later-reminder']));
+    expect(
+      captures.get('failed')?.progress.remindersScheduled.map((id) => id.value),
+      equals(['confirmed']),
+    );
+    expect(
+      captures.get('later')?.progress.remindersScheduled.map((id) => id.value),
+      equals(['later-reminder']),
+    );
+    expect(container.read(captureFlowProvider).notice, equals(CaptureNotice.remindersNotScheduled));
+
+    final attemptsBeforeDeniedRetry = List<String>.unmodifiable(attempted);
+    final progressBeforeDeniedRetry = captures.get('failed')?.progress;
+    final noticeBeforeDeniedRetry = container.read(captureFlowProvider).notice;
+    refuseFirst = false;
+    permissionGranted = false;
+    await notifier.resumeReminders();
+
+    expect(attempted, equals(attemptsBeforeDeniedRetry));
+    expect(captures.get('failed')?.progress, equals(progressBeforeDeniedRetry));
+    expect(container.read(captureFlowProvider).notice, equals(noticeBeforeDeniedRetry));
+
+    permissionGranted = true;
+    await notifier.resumeReminders();
+
+    expect(attempted, equals(['failed-reminder', 'later-reminder', 'failed-reminder']));
+    expect(
+      captures.get('failed')?.progress.remindersScheduled.map((id) => id.value),
+      unorderedEquals(['confirmed', 'failed-reminder']),
+    );
+    expect(container.read(captureFlowProvider).notice, isNull);
   });
 
   test('a recording crashed mid-way keeps its length from the audio on disk; a tap is dropped', () {
@@ -376,8 +473,7 @@ void main() {
     when(() => native.events).thenAnswer((_) => events.stream);
     when(native.micPermission).thenAnswer((_) async => MicPermission.granted);
     when(() => native.startRecording(any(), limit: any(named: 'limit'))).thenAnswer((_) async {});
-    // The first stop answers once the recorder has finished; a later stop
-    // finds nothing to stop.
+    // The first stop waits for the recorder; a later stop must find nothing to stop.
     final firstStop = Completer<RecordingResult?>();
     final stops = [firstStop.future];
     when(native.stopRecording).thenAnswer((_) => stops.isEmpty ? .value(null) : stops.removeLast());
@@ -465,7 +561,7 @@ void main() {
     when(() => native.startRecording(any(), limit: any(named: 'limit'))).thenAnswer((_) async {});
     when(native.stopRecording)
         .thenAnswer((_) async => (path: 'c.pcm', duration: const Duration(seconds: 3)));
-    final container = _container(.new(), native: native, settings: _Connected.new);
+    final container = _container(.new(), native: native, settings: _connected);
     final flow = container.read(captureFlowProvider.notifier);
 
     await flow.start();

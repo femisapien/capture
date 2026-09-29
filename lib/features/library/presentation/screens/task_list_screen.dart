@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:capture/core/data/system/system_datasource.dart';
 import 'package:capture/core/extensions/extensions.dart';
+import 'package:capture/core/testing/app_widget_keys.dart';
 import 'package:capture/core/theme/spacing.dart';
 import 'package:capture/core/widgets/atoms/empty_note.dart';
 import 'package:capture/core/widgets/page_frame.dart';
@@ -17,10 +18,8 @@ import 'package:capture/features/library/presentation/widgets/search_field.dart'
 import 'package:capture/features/settings/presentation/notifiers/settings_notifier.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-/// Open tasks from the local Library mirror. To-do lists all of them and
-/// searches every saved note and task by title; Upcoming lists only dated
-/// ones under a heading per day, soonest first. Tapping an entry edits it.
 class TaskListScreen extends ConsumerWidget {
   const TaskListScreen.todo({super.key}) : _byDay = false;
   const TaskListScreen.upcoming({super.key}) : _byDay = true;
@@ -30,6 +29,8 @@ class TaskListScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = context.l10n;
+    final origin = GoRouterState.of(context).uri.path;
+    final preparing = ref.watchEntryEditing(context, origin: origin);
     final nowUtc = ref.watch(systemDatasourceProvider.select((s) => s.nowUtc()));
     final today = nowUtc.toLocal();
     final query = ref.watch(libraryProvider.select((s) => _byDay ? '' : s.query));
@@ -51,7 +52,7 @@ class TaskListScreen extends ConsumerWidget {
     final groupById = ref.watch(groupsProvider.select((s) => s.byId));
     return PageFrame(
       title: _byDay ? l10n.navUpcoming : l10n.navTodo,
-      subtitle: sync,
+      subtitle: preparing ? l10n.entryBodyLoading : sync,
       actions: [
         RefreshButton(
           onPressed: connected && !refreshing
@@ -82,8 +83,10 @@ class TaskListScreen extends ConsumerWidget {
             ),
           for (final entry in entries)
             EntryRow(
+              key: ValueKey(AppWidgetKeys.libraryEntry(entry.itemId.value)),
               entry: entry,
-              onOpen: () => unawaited(ref.editEntry(context, entry)),
+              onOpen: () =>
+                  unawaited(ref.read(libraryProvider.notifier).body(entry, origin: origin)),
               detail: entry.detail(l10n, today, groupById(entry.groupId)),
               onChanged: (done) =>
                   unawaited(ref.read(libraryProvider.notifier).setDone(entry, done: done)),

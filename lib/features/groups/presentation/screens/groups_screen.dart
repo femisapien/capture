@@ -18,10 +18,9 @@ import 'package:capture/features/library/presentation/notifiers/library_notifier
 import 'package:capture/features/settings/presentation/notifiers/settings_notifier.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
-/// Groups editor. Names and descriptions steer Jev's filing, so each group
-/// explains what belongs in it. Groups are archived, never deleted, so
-/// existing library relations stay valid.
+/// Group names and descriptions steer Jev's filing; archival preserves existing library relations.
 class GroupsScreen extends ConsumerWidget {
   const GroupsScreen({super.key});
 
@@ -52,12 +51,11 @@ class GroupsScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _setArchived(WidgetRef ref, Group group, {required bool archived}) =>
-      ref.read(groupsProvider.notifier).update(group.copyWith(archived: archived));
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = context.l10n;
+    final origin = GoRouterState.of(context).uri.path;
+    final preparing = ref.watchEntryEditing(context, origin: origin);
     final connected = ref.watch(settingsProvider.select((s) => s.notionConnected));
     if (!connected) {
       return PageFrame(title: l10n.navGroups, children: [EmptyNote(l10n.groupsNeedNotion)]);
@@ -68,7 +66,7 @@ class GroupsScreen extends ConsumerWidget {
     final entries = ref.watch(libraryProvider.select((s) => s.entries));
     return PageFrame(
       title: l10n.navGroups,
-      subtitle: l10n.groupsSubtitle,
+      subtitle: preparing ? l10n.entryBodyLoading : l10n.groupsSubtitle,
       actions: [
         LinkButton(
           l10n.refresh,
@@ -88,9 +86,12 @@ class GroupsScreen extends ConsumerWidget {
           entries: entries,
           busy: busy,
           onEdit: (group) => unawaited(_edit(context, ref, group)),
-          onOpenEntry: (entry) => unawaited(ref.editEntry(context, entry)),
-          onArchive: (group) => unawaited(_setArchived(ref, group, archived: true)),
-          onRestore: (group) => unawaited(_setArchived(ref, group, archived: false)),
+          onOpenEntry: (entry) =>
+              unawaited(ref.read(libraryProvider.notifier).body(entry, origin: origin)),
+          onArchive: (group) =>
+              unawaited(ref.read(groupsProvider.notifier).update(group.copyWith(archived: true))),
+          onRestore: (group) =>
+              unawaited(ref.read(groupsProvider.notifier).update(group.copyWith(archived: false))),
         ),
       ],
     );

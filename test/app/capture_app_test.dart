@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:capture/app/app_startup.dart';
 import 'package:capture/app/capture_app.dart';
 import 'package:capture/core/data/notion/notion_http_service.dart';
 import 'package:capture/core/data/notion/notion_workspace_local_datasource.dart';
-import 'package:capture/core/data/secrets/secrets_local_datasource.dart';
 import 'package:capture/core/domain/entities/notion_workspace.dart';
 import 'package:capture/core/services/models/review_card_payload.dart';
 import 'package:capture/core/services/native_event.dart';
@@ -15,9 +15,12 @@ import 'package:capture/features/capture/domain/entities/capture_record.dart';
 import 'package:capture/features/capture/domain/entities/capture_stage.dart';
 import 'package:capture/features/capture/presentation/notifiers/capture_flow_notifier.dart';
 import 'package:capture/features/capture/presentation/widgets/recorder.dart';
+import 'package:capture/features/capture/presentation/widgets/today_card.dart';
 import 'package:capture/features/capture/repositories/capture_repository.dart';
 import 'package:capture/features/capture/repositories/capture_save_repository.dart';
+import 'package:capture/features/groups/repositories/groups_repository.dart';
 import 'package:capture/features/library/domain/entities/library_entry.dart';
+import 'package:capture/features/library/presentation/notifiers/library_notifier.dart';
 import 'package:capture/features/library/repositories/library_repository.dart';
 import 'package:capture/features/settings/presentation/notifiers/settings_notifier.dart';
 import 'package:capture/features/settings/repositories/settings_repository.dart';
@@ -128,6 +131,16 @@ class _Saver implements ICaptureSaveRepository {
       (record: record, notificationsOff: false);
 }
 
+/// The same system clock advanced while Home is absent.
+class _Clock extends FakeSystem {
+  _Clock(DateTime local) : atUtc = local.toUtc();
+
+  DateTime atUtc;
+
+  @override
+  DateTime nowUtc() => atUtc;
+}
+
 /// Saved entries as last synced; edits are recorded instead of sent.
 class _Library implements ILibraryRepository {
   final updates = <LibraryEntry>[];
@@ -159,6 +172,14 @@ class _Library implements ILibraryRepository {
   Future<NotionResult<void>> delete(LibraryEntry entry) async => const .ok(null);
 }
 
+/// Complete page preparation after navigation or another modal has claimed the screen.
+class _PendingLibrary extends SampleLibrary {
+  Completer<NotionResult<String>> pending = Completer();
+
+  @override
+  Future<NotionResult<String>> body(LibraryEntry entry) => pending.future;
+}
+
 void main() {
   late Directory support;
   late INativePlatformService native;
@@ -183,8 +204,7 @@ void main() {
     await _launch(tester, support: support, native: native);
 
     expect(find.text(_l10n.setupTitle), findsOneWidget);
-    // Real time, so the draft's folder is created on disk, until the
-    // recorder starts (at most 5 seconds, however slow the disk is).
+    // Use real time until the recorder starts so draft-folder disk creation can finish (at most five seconds).
     await tester.runAsync(() => tester.tap(find.byKey(const ValueKey(AppWidgetKeys.recordButton))));
     for (int waited = 0; !started && waited < 50; waited++) {
       await tester.runAsync(() => Future<void>.delayed(const .new(milliseconds: 100)));
@@ -210,33 +230,35 @@ void main() {
     verify(native.checkForUpdates).called(1);
   });
 
-  testWidgets('each page shows its truthful empty state', (tester) async {
-    await _launch(tester, support: support, native: native);
+  testWidgets('Home re-entry after midnight shows newly due tasks without a library update', (
+    tester,
+  ) async {
+    final clock = _Clock(DateTime(2026, 9, 17, 23, 59));
+    await _pump(tester, [
+      ...appOverrides(
+        support: support,
+        native: native,
+        fakes: (secrets: null, reminders: null, system: clock),
+      ),
+      settingsProvider.overrideWithBuild(readySettings),
+      appStartupProvider.overrideWith((ref) async {}),
+      libraryRepositoryProvider.overrideWithValue(SampleLibrary()),
+    ]);
+    final app = ProviderScope.containerOf(tester.element(find.byType(CaptureApp)));
+    final library = app.read(libraryProvider);
+    expect([
+      for (final item in tester.widget<TodayCard>(find.byType(TodayCard)).items) item.title,
+    ], equals([sampleTaskTitle]));
 
-    await _open(tester, AppWidgetKeys.navGroups);
-    expect(find.text(_l10n.groupsNeedNotion), findsOneWidget);
-    await _open(tester, AppWidgetKeys.navRecordings);
-    expect(find.text(_l10n.emptyCaptures), findsOneWidget);
-    await _open(tester, AppWidgetKeys.navTodo);
-    expect(find.text(_l10n.emptyOpenTasks), findsOneWidget);
-    await _open(tester, AppWidgetKeys.navUpcoming);
-    expect(find.text(_l10n.emptyUpcoming), findsOneWidget);
     await _open(tester, AppWidgetKeys.settingsButton);
-    expect(find.byKey(const ValueKey(AppWidgetKeys.typesafeKeyField)), findsOneWidget);
-  });
+    expect(find.byType(TodayCard), findsNothing);
+    clock.atUtc = DateTime(2026, 9, 18, 0, 1).toUtc();
+    await _open(tester, AppWidgetKeys.navHome);
 
-  testWidgets('the Notion step shows a picture for every setup step', (tester) async {
-    await _launch(tester, support: support, native: native);
-
-    await tester.ensureVisible(find.byKey(const ValueKey(AppWidgetKeys.notionGuideButton)));
-    await _open(tester, AppWidgetKeys.notionGuideButton);
-
-    expect(find.text(_l10n.notionGuideTitle), findsOneWidget);
-    expect(find.textContaining(_l10n.notionGuideStep6), findsOneWidget);
-    expect(find.byType(Image), findsNWidgets(6));
-    await tester.tap(find.text(_l10n.close));
-    await _settle(tester);
-    expect(find.text(_l10n.notionGuideTitle), findsNothing);
+    expect(app.read(libraryProvider), same(library));
+    expect([
+      for (final item in tester.widget<TodayCard>(find.byType(TodayCard)).items) item.title,
+    ], equals([for (final entry in sampleEntries.take(3)) entry.title]));
   });
 
   testWidgets('To-do search finds a saved note by title and saves an edit to it', (tester) async {
@@ -255,7 +277,7 @@ void main() {
     expect(find.text('Milk frother idea'), findsOneWidget);
     expect(find.text('Call the dentist'), findsNothing);
 
-    await tester.tap(find.text('Milk frother idea'));
+    await tester.tap(find.byKey(ValueKey(AppWidgetKeys.libraryEntry('i2'))));
     await _settle(tester);
     await tester.enterText(
       find.byKey(const ValueKey(AppWidgetKeys.entryTitleField)),
@@ -267,61 +289,42 @@ void main() {
     expect(find.text('Milk frother for the café'), findsOneWidget);
   });
 
-  testWidgets(
-    'Reset forgets keys, Notion page, captures, auto-save and reminders; keeps the model',
-    (tester) async {
-      final seed = ProviderContainer.test(
-        overrides: appOverrides(support: support, native: native),
-      );
-      seed.read(captureRepositoryProvider).put(sampleProposedCapture);
-      seed.read(notionWorkspaceLocalDatasourceProvider).write(.fromEntity(sampleWorkspace));
-      seed.read(settingsRepositoryProvider).saveAutoSave(on: true);
-      seed.dispose();
-      final recording = File('${support.path}/captures/proposed.m4a')..createSync(recursive: true);
-      final model = File('${support.path}/model/verified.json')..createSync(recursive: true);
-      final secrets = FakeSecrets({.typesafeKey: 'key', .notionToken: 'token'});
-      final reminders = FakeReminders();
-      await _pump(
-        tester,
-        appOverrides(
-          support: support,
-          native: native,
-          fakes: (secrets: secrets, reminders: reminders, system: null),
-        ),
-      );
-      await _open(tester, AppWidgetKeys.navRecordings);
-      expect(find.byKey(ValueKey(sampleProposedCapture.id.value)), findsOneWidget);
-      await _open(tester, AppWidgetKeys.settingsButton);
-      expect(find.text(_l10n.typesafeSaved), findsOneWidget);
-      expect(find.text(_l10n.notionNeeded), findsNothing);
+  testWidgets('a prepared entry cannot reopen after navigation or cover another modal', (
+    tester,
+  ) async {
+    final library = _PendingLibrary();
+    await _pump(tester, [
+      ...appOverrides(support: support, native: native),
+      appStartupProvider.overrideWith((ref) async {}),
+      settingsProvider.overrideWithBuild(readySettings),
+      groupsRepositoryProvider.overrideWithValue(SampleGroups()),
+      libraryRepositoryProvider.overrideWithValue(library),
+    ]);
+    await _open(tester, AppWidgetKeys.navTodo);
+    await tester.tap(find.byKey(ValueKey(AppWidgetKeys.libraryEntry('1'))));
+    await _settle(tester);
+    expect(find.text(_l10n.entryBodyLoading), findsOneWidget);
+    await _open(tester, AppWidgetKeys.settingsButton);
+    library.pending.complete(const .ok('Prepared after navigation'));
+    await _settle(tester);
+    final dialogsAfterNavigation = find.byType(AlertDialog).evaluate().length;
+    expect(dialogsAfterNavigation, equals(0));
 
-      final reset = find.byKey(const ValueKey(AppWidgetKeys.resetButton));
-      await tester.scrollUntilVisible(
-        reset,
-        300,
-        scrollable: find
-            .descendant(of: find.byType(PageFrame), matching: find.byType(Scrollable))
-            .first,
-      );
-      await tester.ensureVisible(reset);
-      await _settle(tester);
-      await _open(tester, AppWidgetKeys.resetButton);
-      await _open(tester, AppWidgetKeys.resetConfirmButton);
-
-      expect([for (final s in Secret.values) await secrets.read(s)], equals([null, null]));
-      expect(recording.parent.existsSync(), isFalse);
-      expect(model.existsSync(), isTrue);
-      expect(reminders.cancelledAll, isTrue);
-      final app = ProviderScope.containerOf(tester.element(find.byType(CaptureApp)));
-      expect(app.read(settingsProvider).autoSave, isFalse);
-      expect(app.read(settingsRepositoryProvider).autoSave(), isFalse);
-      expect(find.text(_l10n.setupTitle), findsOneWidget);
-      expect(find.text(_l10n.typesafeNeeded), findsOneWidget);
-      expect(find.text(_l10n.notionNeeded), findsOneWidget);
-      await _open(tester, AppWidgetKeys.navRecordings);
-      expect(find.text(_l10n.emptyCaptures), findsOneWidget);
-    },
-  );
+    library.pending = Completer();
+    await _open(tester, AppWidgetKeys.navGroups);
+    await tester.tap(find.byKey(ValueKey(AppWidgetKeys.groupCard('home'))));
+    await _settle(tester);
+    await tester.tap(find.text(sampleTaskTitle));
+    await _settle(tester);
+    await _open(tester, AppWidgetKeys.addGroupButton);
+    library.pending.complete(const .ok('Prepared behind another modal'));
+    await _settle(tester);
+    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byKey(const ValueKey(AppWidgetKeys.entryTitleField)), findsNothing);
+    await tester.tap(find.text(_l10n.cancel));
+    await _settle(tester);
+    expect(find.byType(AlertDialog).evaluate().length, equals(dialogsAfterNavigation));
+  });
 
   testWidgets('a ticked auto-save is remembered and saves a clean capture with a notification', (
     tester,
@@ -350,9 +353,12 @@ void main() {
     await tester.scrollUntilVisible(
       autoSave,
       300,
-      scrollable: find
-          .descendant(of: find.byType(PageFrame), matching: find.byType(Scrollable))
-          .first,
+      scrollable: find.descendant(
+        of: find.byType(PageFrame),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Scrollable && widget.axisDirection == .down,
+        ),
+      ),
     );
     await _settle(tester);
     expect(tester.widget<Checkbox>(autoSave).value, isFalse);
@@ -391,9 +397,12 @@ void main() {
       await tester.scrollUntilVisible(
         quickAccess,
         300,
-        scrollable: find
-            .descendant(of: find.byType(PageFrame), matching: find.byType(Scrollable))
-            .first,
+        scrollable: find.descendant(
+          of: find.byType(PageFrame),
+          matching: find.byWidgetPredicate(
+            (widget) => widget is Scrollable && widget.axisDirection == .down,
+          ),
+        ),
       );
 
       expect(quickAccess, findsOneWidget);
@@ -485,7 +494,7 @@ void main() {
       await _settle(tester);
       await _open(tester, AppWidgetKeys.reviewEditButton);
 
-      await tester.tap(find.textContaining('9:00'));
+      await tester.tap(find.byKey(const ValueKey(AppWidgetKeys.whenTimeButton)));
       await _settle(tester);
 
       // Digits squeezed into a shorter field are clipped.

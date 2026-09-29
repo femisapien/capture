@@ -10,7 +10,6 @@ import 'package:capture/features/capture/presentation/extensions/capture_labels.
 import 'package:capture/features/capture/presentation/extensions/menu_lines.dart';
 import 'package:capture/features/capture/presentation/notifiers/capture_flow_notifier.dart';
 import 'package:capture/features/capture/presentation/notifiers/capture_phase.dart';
-import 'package:capture/features/capture/presentation/notifiers/due_today_entries_provider.dart';
 import 'package:capture/features/capture/presentation/widgets/home_cards.dart';
 import 'package:capture/features/capture/presentation/widgets/recent_card.dart';
 import 'package:capture/features/capture/presentation/widgets/recorder.dart';
@@ -23,8 +22,6 @@ import 'package:capture/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// Wordmark, the mic, and either first-run setup or the Today, Recent and
-/// Groups cards.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -66,7 +63,7 @@ class HomeScreen extends ConsumerWidget {
       captureFlowProvider.select((s) => (phase: s.phase, notice: s.notice, failure: s.failure)),
     );
     final now = ref.watch(systemDatasourceProvider.select((system) => system.nowUtc())).toLocal();
-    final today = ref.watch(dueTodayEntriesProvider);
+    final today = ref.watch(libraryProvider.select((state) => state.dueToday(now)));
     final recent = ref.watch(captureFlowProvider.select((s) => s.captures)).take(_recentLimit);
     final groups = ref.watch(groupsProvider.select((s) => s.active)).take(_groupsLimit);
     final canToggle = phase == .idle || phase == .recording;
@@ -98,7 +95,7 @@ class HomeScreen extends ConsumerWidget {
                   today: .new(
                     items: [
                       for (final (:entry, :due) in today)
-                        (title: entry.title ?? '', due: due.label(l10n, now), done: entry.done),
+                        (title: entry.title, due: due.label(l10n, now), done: entry.done),
                     ],
                     onDoneChanged: (index, {required done}) => unawaited(
                       ref.read(libraryProvider.notifier).setDone(today[index].entry, done: done),

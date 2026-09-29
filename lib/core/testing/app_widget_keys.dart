@@ -1,5 +1,3 @@
-/// Stable selectors for widget and E2E tests. Widgets use
-/// `ValueKey(AppWidgetKeys.x)`.
 abstract final class AppWidgetKeys {
   // Shell
   static const navHome = 'shell.nav.home';
@@ -29,6 +27,7 @@ abstract final class AppWidgetKeys {
   static const notionPageField = 'setup.notion.page';
   static const notionConnectButton = 'setup.notion.connect';
   static const notionGuideButton = 'setup.notion.guide';
+  static String notionGuideStep(int step) => 'setup.notion.guide.step.$step';
   static const notionDisconnectButton = 'setup.notion.disconnect';
   static const shortcutChangeButton = 'settings.shortcut.change';
   static const shortcutSaveButton = 'settings.shortcut.save';
@@ -41,12 +40,14 @@ abstract final class AppWidgetKeys {
   static const deleteConfirmButton = 'recordings.delete.confirm';
   static const editorSaveButton = 'editor.save';
   static const editorDontSaveButton = 'editor.dontSave';
+  static const whenTimeButton = 'editor.when.time';
 
   // Groups
   static const addGroupButton = 'groups.add';
   static const groupNameField = 'groups.dialog.name';
   static const groupDescriptionField = 'groups.dialog.description';
   static const groupDialogSaveButton = 'groups.dialog.save';
+  static String groupCard(String groupId) => 'groups.card.$groupId';
 
   // Library
   static const refreshButton = 'library.refresh';
@@ -57,4 +58,5 @@ abstract final class AppWidgetKeys {
   static const entryCancelButton = 'library.entry.cancel';
   static const entryDeleteButton = 'library.entry.delete';
   static const entryDeleteConfirmButton = 'library.entry.deleteConfirm';
+  static String libraryEntry(String itemId) => 'library.entry.$itemId';
 }

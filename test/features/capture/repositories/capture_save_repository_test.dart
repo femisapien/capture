@@ -26,7 +26,7 @@ class _AllowedReminders implements IReminderDatasource {
   @override
   Future<bool> schedule({
     required String itemId,
-    required String title,
+    required String? title,
     required tz.TZDateTime at,
   }) async => true;
 
@@ -70,9 +70,7 @@ final _record = CaptureRecord(
   items: [_dentist],
 );
 
-/// Schedules [_record]'s reminder; [stored] is whether the local store
-/// still holds it once the permission prompt is answered. Returns what was
-/// written to the store.
+/// Resolve permission after the local reminder may have been removed.
 Future<List<CaptureRecordModel>> _schedule({required bool stored}) async {
   final local = _MockLocal();
   final writes = <CaptureRecordModel>[];
@@ -101,9 +99,6 @@ final _workspace = NotionWorkspace(
 /// [_record] approved with a second item and no audio to upload.
 final _approved = _record.copyWith(stage: .approved, items: [_dentist, _tomatoes]);
 
-/// Notion with nothing saved yet, where creating [failingItem]'s page fails
-/// once and then works. Every page Notion is asked to make goes into
-/// [created].
 _MockRemote _notion({required String failingItem, required List<String> created}) {
   final remote = _MockRemote();
   bool failed = false;
@@ -162,14 +157,23 @@ void main() {
       Err(:final failure) => fail('Retry failed: $failure'),
     };
     expect(created, equals(['capture', 'item-1', 'item-2', 'item-2']));
-    expect(progress.itemPages, equals({'item-1': 'page-item-1', 'item-2': 'page-item-2'}));
+    expect({
+      for (final MapEntry(:key, :value) in progress.itemPages.entries) key.value: value.value,
+    }, equals({'item-1': 'page-item-1', 'item-2': 'page-item-2'}));
+    expect(
+      writes.last.progress.toJson()['itemPages'],
+      equals({'item-1': 'page-item-1', 'item-2': 'page-item-2'}),
+    );
     expect(progress.markedSaved, isTrue);
   });
 
   test('a scheduled reminder is recorded on the stored capture', () async {
     final writes = await _schedule(stored: true);
     expect(
-      [for (final w in writes) w.toEntity().progress.remindersScheduled],
+      [
+        for (final w in writes)
+          w.toEntity().progress.remindersScheduled.map((id) => id.value).toSet(),
+      ],
       equals([
         {'item-1'},
       ]),

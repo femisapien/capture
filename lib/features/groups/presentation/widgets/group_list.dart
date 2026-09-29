@@ -1,4 +1,5 @@
 import 'package:capture/core/extensions/extensions.dart';
+import 'package:capture/core/testing/app_widget_keys.dart';
 import 'package:capture/core/theme/spacing.dart';
 import 'package:capture/features/groups/domain/entities/group.dart';
 import 'package:capture/features/groups/presentation/widgets/group_card.dart';
@@ -6,9 +7,6 @@ import 'package:capture/features/library/domain/entities/library_entry.dart';
 import 'package:capture/features/library/presentation/extensions/library_labels.dart';
 import 'package:flutter/material.dart';
 
-/// [GroupCard]s for the active groups, then any archived ones under their
-/// own header. Active groups offer Archive (except Unsorted); archived groups
-/// offer Restore.
 class GroupList extends StatelessWidget {
   const GroupList({
     required this.activeGroups,
@@ -52,7 +50,7 @@ class GroupList extends StatelessWidget {
             const SizedBox(height: Spacing.xs),
           ],
           GroupCard(
-            key: ValueKey(id.value),
+            key: ValueKey(AppWidgetKeys.groupCard(id.value)),
             group: group,
             items: entries.filedIn(id),
             busy: busy,

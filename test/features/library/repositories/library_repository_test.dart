@@ -1,20 +1,27 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:capture/core/data/database/local_database_datasource.dart';
 import 'package:capture/core/data/notion/notion_http_service.dart';
 import 'package:capture/core/data/reminders/reminder_datasource.dart';
 import 'package:capture/core/domain/values/result.dart';
+import 'package:capture/core/router/app_routes.dart';
 import 'package:capture/features/library/data/datasources/library_local_datasource.dart';
 import 'package:capture/features/library/data/datasources/library_remote_datasource.dart';
 import 'package:capture/features/library/data/models/library_entry_model.dart';
 import 'package:capture/features/library/domain/entities/library_entry.dart';
+import 'package:capture/features/library/presentation/notifiers/library_notifier.dart';
 import 'package:capture/features/library/repositories/library_repository.dart';
+import 'package:capture/features/settings/presentation/notifiers/settings_notifier.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../../../helpers/app_harness.dart';
 import '../../../helpers/sample_workspace.dart';
 import '../../../helpers/test_fakes.dart';
 
-/// Notion's Library: [failure] makes every write fail; otherwise writes land
-/// in [pages] and the page body is [bodyText].
 class _Notion implements ILibraryRemoteDatasource {
   _Notion({this.failure});
   final NotionFailure? failure;
@@ -22,6 +29,8 @@ class _Notion implements ILibraryRemoteDatasource {
   final trashed = <String>[];
   String? zone;
   String bodyText = 'Old details';
+  Object? bodyException;
+  Completer<NotionResult<ItemBody>>? pendingBody;
   String? newBody;
 
   NotionResult<void> get _write => switch (failure) {
@@ -46,8 +55,11 @@ class _Notion implements ILibraryRemoteDatasource {
   }
 
   @override
-  Future<NotionResult<ItemBody>> body(String pageId) async =>
-      .ok((text: bodyText, blockIds: ['p1']));
+  Future<NotionResult<ItemBody>> body(String pageId) async {
+    if (bodyException case final error?) return Future.error(error);
+    if (pendingBody case final pending?) return pending.future;
+    return .ok((text: bodyText, blockIds: ['p1']));
+  }
 
   @override
   Future<NotionResult<void>> replaceBody(String pageId, ItemBody old, String text) async {
@@ -87,7 +99,7 @@ class _Reminders implements IReminderDatasource {
   @override
   Future<bool> schedule({
     required String itemId,
-    required String title,
+    required String? title,
     required tz.TZDateTime at,
   }) async {
     calls.add('schedule $itemId ${at.toUtc().toIso8601String()}');
@@ -126,6 +138,116 @@ class _Fixture {
 
 void main() {
   setUpAll(tzdata.initializeTimeZones);
+
+  test('a failed SQLite refresh keeps prior entries and can be retried', () async {
+    final support = Directory.systemTemp.createTempSync('capture_library_refresh');
+    addTearDown(() => support.deleteSync(recursive: true));
+    final updated = _task.copyWith(title: 'Updated in Notion');
+    final notion = _Notion()..pages['page-1'] = .fromEntity(updated);
+    final container = ProviderContainer.test(
+      overrides: [
+        ...appOverrides(support: support, native: stubNative()),
+        settingsProvider.overrideWithBuild(readySettings),
+        libraryRemoteDatasourceProvider.overrideWithValue(notion),
+      ],
+    );
+    final local = container.read(libraryLocalDatasourceProvider);
+    local.put(.fromEntity(_task));
+    final notifier = container.read(libraryProvider.notifier);
+    final database = container.read(localDatabaseProvider);
+    database.execute('''
+      CREATE TRIGGER fail_refresh BEFORE INSERT ON library
+      BEGIN SELECT RAISE(ABORT, 'synthetic cache write failure'); END;
+    ''');
+
+    await expectLater(notifier.refresh(), completes);
+
+    final failed = container.read(libraryProvider);
+    expect(failed.entries, equals([_task]));
+    expect(failed.refreshing, isFalse);
+    expect(failed.cacheRefreshFailed, isTrue);
+    expect(failed.failure, isNull);
+    expect(failed.failureSerial, equals(1));
+    expect(failed.refreshedAtUtc, isNull);
+    expect(local.all().map((entry) => entry.toEntity()), equals([_task]));
+
+    database.execute('DROP TRIGGER fail_refresh');
+    await notifier.refresh();
+
+    final retried = container.read(libraryProvider);
+    expect(retried.entries, equals([updated]));
+    expect(retried.refreshing, isFalse);
+    expect(retried.cacheRefreshFailed, isFalse);
+    expect(retried.refreshedAtUtc, equals(FakeSystem.now));
+  });
+
+  test('an unexpected body-read failure preserves the library and can be retried', () async {
+    for (final error in [
+      Exception('synthetic body read failure'),
+      StateError('synthetic body state error'),
+    ]) {
+      final fixture = _Fixture();
+      fixture.notion.bodyException = error;
+      final container = ProviderContainer.test(
+        overrides: [libraryRepositoryProvider.overrideWithValue(fixture.repo)],
+      );
+      final notifier = container.read(libraryProvider.notifier);
+      final previous = container.read(libraryProvider);
+
+      await expectLater(notifier.body(_task, origin: const TodoRoute().location), completes);
+
+      final failed = container.read(libraryProvider);
+      expect(failed.entries, equals(previous.entries));
+      expect(failed.failure, previous.failure);
+      expect(failed.failureSerial, previous.failureSerial);
+      expect(failed.bodyEntry, _task);
+      expect(failed.bodyLoading, isFalse);
+      expect(failed.bodyText, isNull);
+      expect(fixture.repo.cached(), equals([_task]));
+      fixture.notion.bodyException = null;
+
+      await notifier.body(_task, origin: const TodoRoute().location);
+
+      expect(container.read(libraryProvider).bodyText, equals('Old details'));
+    }
+  });
+
+  test('older entry and same-entry body completions cannot replace the current request', () async {
+    final fixture = _Fixture();
+    final container = ProviderContainer.test(
+      overrides: [libraryRepositoryProvider.overrideWithValue(fixture.repo)],
+    );
+    final notifier = container.read(libraryProvider.notifier);
+    final olderEntry = Completer<NotionResult<ItemBody>>();
+    fixture.notion.pendingBody = olderEntry;
+    final first = notifier.body(_task, origin: const TodoRoute().location);
+    final other = _task.copyWith(pageId: .new('page-2'), itemId: .new('item-2'));
+    final olderRetry = Completer<NotionResult<ItemBody>>();
+    fixture.notion.pendingBody = olderRetry;
+    final second = notifier.body(other, origin: const GroupsRoute().location);
+    final waiting = container.read(libraryProvider);
+
+    olderEntry.complete(const .err(.unavailable));
+    await first;
+
+    expect(container.read(libraryProvider), same(waiting));
+    final newest = Completer<NotionResult<ItemBody>>();
+    fixture.notion.pendingBody = newest;
+    final third = notifier.body(other, origin: const GroupsRoute().location);
+    newest.complete(const .ok((text: 'Current details', blockIds: [])));
+    await third;
+    final current = container.read(libraryProvider);
+
+    olderRetry.complete(const .ok((text: 'Obsolete details', blockIds: [])));
+    await second;
+
+    expect(container.read(libraryProvider), same(current));
+    expect(current.bodyEntry, other);
+    expect(current.bodyOrigin, const GroupsRoute().location);
+    expect(current.bodyLoading, isFalse);
+    expect(current.bodyText, equals('Current details'));
+    expect(current.failureSerial, equals(0));
+  });
 
   test('an edit reaches Notion and the mirror, and the reminder is rescheduled', () async {
     final _Fixture(:repo, :notion, :mirror, :reminders) = _Fixture();

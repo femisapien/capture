@@ -8,9 +8,7 @@ import 'package:capture/features/groups/domain/entities/group.dart';
 import 'package:capture/features/library/domain/entities/library_entry.dart';
 import 'package:flutter/material.dart';
 
-/// One group: name, description, saved count and an expandable list of what
-/// is filed there. A null [onArchive]/[onRestore] hides that action; [busy]
-/// disables every action.
+/// Null actions are hidden; [busy] disables every action.
 class GroupCard extends StatelessWidget {
   const GroupCard({
     required this.group,
@@ -49,7 +47,10 @@ class GroupCard extends StatelessWidget {
           color: group.archived ? context.colors.onSurfaceVariant : context.colors.onSurface,
         ),
       ),
-      subtitle: Text(group.description ?? '', style: labelMedium),
+      subtitle: switch (group.description) {
+        final String description => Text(description, style: labelMedium),
+        null => null,
+      },
       trailing: Row(
         mainAxisSize: .min,
         spacing: Spacing.xs,
@@ -86,7 +87,10 @@ class GroupCard extends StatelessWidget {
               LibraryEntry(done: true) => Icons.check_box_outlined,
               LibraryEntry() => Icons.check_box_outline_blank,
             }, color: context.colors.onSurface),
-            title: Text(entry.title ?? '', style: bodyMedium),
+            title: switch (entry.title) {
+              final String title => Text(title, style: bodyMedium),
+              null => null,
+            },
           ),
       ],
     );

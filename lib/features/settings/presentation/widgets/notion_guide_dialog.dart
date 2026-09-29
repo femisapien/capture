@@ -1,12 +1,12 @@
 import 'package:capture/core/extensions/extensions.dart';
+import 'package:capture/core/testing/app_widget_keys.dart';
 import 'package:capture/core/theme/radii.dart';
 import 'package:capture/core/theme/sizes.dart';
 import 'package:capture/core/theme/spacing.dart';
 import 'package:capture/core/widgets/atoms/link_button.dart';
 import 'package:flutter/material.dart';
 
-/// Step-by-step pictures of creating the Notion connection and adding it to
-/// a page. Screenshots have names and the token masked out.
+/// Keep names and tokens masked in the setup screenshots.
 class NotionGuideDialog extends StatelessWidget {
   const NotionGuideDialog({required this.onClose, super.key});
 
@@ -31,25 +31,24 @@ class NotionGuideDialog extends StatelessWidget {
       content: SizedBox(
         width: Sizes.guideWidth,
         height: Sizes.guideHeight,
-        child: ListView(
-          children: [
-            for (final (index, step) in steps.indexed)
-              Padding(
-                padding: const .only(bottom: Spacing.lg),
-                child: Column(
-                  crossAxisAlignment: .start,
-                  spacing: Spacing.sm,
-                  children: [
-                    Text(l10n.numberedStep(index + 1, step), style: textTheme.bodyMedium),
-                    ClipRRect(
-                      borderRadius: Radii.rounded10,
-                      // The step text above says what the picture shows.
-                      child: Image.asset(_picture(index + 1), excludeFromSemantics: true),
-                    ),
-                  ],
+        child: ListView.builder(
+          itemCount: steps.length,
+          itemBuilder: (context, index) => Padding(
+            key: ValueKey(AppWidgetKeys.notionGuideStep(index + 1)),
+            padding: const .only(bottom: Spacing.lg),
+            child: Column(
+              crossAxisAlignment: .start,
+              spacing: Spacing.sm,
+              children: [
+                Text(l10n.numberedStep(index + 1, steps[index]), style: textTheme.bodyMedium),
+                ClipRRect(
+                  borderRadius: Radii.rounded10,
+                  // The step text above says what the picture shows.
+                  child: Image.asset(_picture(index + 1), excludeFromSemantics: true),
                 ),
-              ),
-          ],
+              ],
+            ),
+          ),
         ),
       ),
       actions: [LinkButton(l10n.close, onPressed: onClose)],

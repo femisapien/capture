@@ -1,14 +1,17 @@
+import 'package:capture/core/crash/crash.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:timezone/timezone.dart' as tz;
 
 part 'reminder_datasource.g.dart';
 
-/// Mac and iPhone notifications for approved, saved tasks, and for captures saved
-/// without the review card.
 abstract interface class IReminderDatasource {
   /// False when notifications are not permitted.
-  Future<bool> schedule({required String itemId, required String title, required tz.TZDateTime at});
+  Future<bool> schedule({
+    required String itemId,
+    required String? title,
+    required tz.TZDateTime at,
+  });
   Future<void> cancel(String itemId);
 
   /// Shows a notification now; nothing when notifications are not permitted.
@@ -71,7 +74,7 @@ class LocalNotificationsReminderDatasource implements IReminderDatasource {
   @override
   Future<bool> schedule({
     required String itemId,
-    required String title,
+    required String? title,
     required tz.TZDateTime at,
   }) async {
     if (!await _ensure()) return false;
@@ -88,13 +91,17 @@ class LocalNotificationsReminderDatasource implements IReminderDatasource {
 
   @override
   Future<void> show({required String id, required String title, required String body}) async {
-    if (!await _ensure()) return;
-    await _plugin.show(
-      id: notificationId(id),
-      title: title,
-      body: body,
-      notificationDetails: const .new(macOS: .new(), iOS: .new()),
-    );
+    try {
+      if (!await _ensure()) return;
+      await _plugin.show(
+        id: notificationId(id),
+        title: title,
+        body: body,
+        notificationDetails: const .new(macOS: .new(), iOS: .new()),
+      );
+    } catch (error, stackTrace) {
+      Crash.error(error, stackTrace);
+    }
   }
 
   @override

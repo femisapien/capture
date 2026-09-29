@@ -2,31 +2,29 @@ import 'dart:async';
 
 import 'package:capture/core/data/system/system_datasource.dart';
 import 'package:capture/core/extensions/extensions.dart';
-import 'package:capture/core/router/app_routes.dart';
 import 'package:capture/core/theme/spacing.dart';
 import 'package:capture/core/widgets/atoms/paper_card.dart';
 import 'package:capture/core/widgets/page_frame.dart';
 import 'package:capture/features/capture/presentation/notifiers/capture_flow_notifier.dart';
 import 'package:capture/features/settings/presentation/notifiers/settings_notifier.dart';
 import 'package:capture/features/settings/presentation/screens/setup_steps_screen.dart';
+import 'package:capture/features/settings/presentation/screens/shortcut_section_screen.dart';
 import 'package:capture/features/settings/presentation/widgets/auto_save_section.dart';
 import 'package:capture/features/settings/presentation/widgets/mic_section.dart';
 import 'package:capture/features/settings/presentation/widgets/privacy_section.dart';
 import 'package:capture/features/settings/presentation/widgets/quick_access_section.dart';
 import 'package:capture/features/settings/presentation/widgets/reset_dialog.dart';
 import 'package:capture/features/settings/presentation/widgets/reset_section.dart';
-import 'package:capture/features/settings/presentation/widgets/shortcut_section.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// Setup steps, shortcut (quick access on iPhone), microphone, auto-save,
-/// privacy and reset.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   static const _resetDialogRoute = 'reset-dialog';
 
   Future<void> _confirmReset(BuildContext context, WidgetRef ref) async {
+    final startOver = ref.read(captureFlowProvider.notifier).startOver;
     final confirmed = await showDialog<bool>(
       context: context,
       routeSettings: const .new(name: _resetDialogRoute),
@@ -36,9 +34,7 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
     if (confirmed != true || !context.mounted) return;
-    await ref.read(captureFlowProvider.notifier).startOver();
-    if (!context.mounted) return;
-    const HomeRoute().go(context);
+    unawaited(startOver());
   }
 
   @override
@@ -62,7 +58,7 @@ class SettingsScreen extends ConsumerWidget {
         PaperCard(
           child: phone
               ? const QuickAccessSection()
-              : ShortcutSection(
+              : ShortcutSectionScreen(
                   label: label,
                   registered: registered,
                   problem: problem,
@@ -83,7 +79,7 @@ class SettingsScreen extends ConsumerWidget {
               .undetermined => l10n.micUndetermined,
             },
             onAllow: mic == .undetermined
-                ? () => unawaited(ref.read(settingsProvider.notifier).ensureMic())
+                ? () => unawaited(ref.read(settingsProvider.notifier).allowMic())
                 : null,
           ),
         ),

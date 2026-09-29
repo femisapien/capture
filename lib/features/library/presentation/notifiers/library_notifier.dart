@@ -1,3 +1,4 @@
+import 'package:capture/core/crash/crash.dart';
 import 'package:capture/core/data/notion/notion_http_service.dart';
 import 'package:capture/core/data/system/system_datasource.dart';
 import 'package:capture/core/domain/values/result.dart';
@@ -16,62 +17,99 @@ class LibraryNotifier extends _$LibraryNotifier {
 
   ILibraryRepository _ensureRepository() => ref.read(libraryRepositoryProvider);
 
-  void _markRefreshing() => state = state.copyWith(refreshing: true);
+  void _markRefreshing() => state = state.copyWith(refreshing: true, cacheRefreshFailed: false);
 
   Future<void> refresh() async {
     final ws = ref.read(settingsProvider).workspace;
     if (ws == null || state.refreshing) return;
+    final repository = _ensureRepository();
     _markRefreshing();
-    final result = await _ensureRepository().refresh(ws);
-    if (!ref.mounted) return;
-    state = switch (result) {
-      Ok(:final value) => state.copyWith(
+    try {
+      final result = await repository.refresh(ws);
+      if (!ref.mounted) return;
+      state = switch (result) {
+        Ok(:final value) => state.copyWith(
+          refreshing: false,
+          entries: value,
+          refreshedAtUtc: ref.read(systemDatasourceProvider).nowUtc(),
+        ),
+        Err(:final failure) => _failed(state.copyWith(refreshing: false), failure),
+      };
+    } on Exception catch (error, stackTrace) {
+      Crash.error(error, stackTrace);
+      if (!ref.mounted) return;
+      state = state.copyWith(
         refreshing: false,
-        entries: value,
-        refreshedAtUtc: ref.read(systemDatasourceProvider).nowUtc(),
-      ),
-      Err(:final failure) => _failed(state.copyWith(refreshing: false), failure),
-    };
+        cacheRefreshFailed: true,
+        failure: null,
+        failureSerial: state.failureSerial + 1,
+      );
+    }
   }
 
   Future<void> setDone(LibraryEntry entry, {required bool done}) async {
-    final result = await _ensureRepository().setDone(entry, done: done);
-    if (!ref.mounted) return;
-    state = _replaced(result);
+    try {
+      final result = await _ensureRepository().setDone(entry, done: done);
+      if (!ref.mounted) return;
+      state = _replaced(result);
+    } catch (error, stackTrace) {
+      Crash.error(error, stackTrace);
+    }
   }
 
-  /// The body on the entry's Notion page, or null when it cannot be read.
-  Future<String?> body(LibraryEntry entry) async {
-    final result = await _ensureRepository().body(entry);
-    if (!ref.mounted) return null;
-    switch (result) {
-      case Ok(:final value):
-        return value;
-      case Err(:final failure):
-        state = _failed(state, failure);
-        return null;
+  /// Prepares one editor snapshot; a later request owns any subsequent completion.
+  Future<void> body(LibraryEntry entry, {required String origin}) async {
+    final serial = state.bodyLoadSerial + 1;
+    state = state.copyWith(
+      bodyEntry: entry,
+      bodyOrigin: origin,
+      bodyLoading: true,
+      bodyText: null,
+      bodyLoadSerial: serial,
+    );
+    try {
+      final result = await _ensureRepository().body(entry);
+      if (!ref.mounted) return;
+      if (state.bodyLoadSerial != serial) return;
+      state = switch (result) {
+        Ok(:final value) => state.copyWith(bodyLoading: false, bodyText: value),
+        Err(:final failure) => _failed(state.copyWith(bodyLoading: false), failure),
+      };
+    } catch (error, stackTrace) {
+      Crash.error(error, stackTrace);
+      if (!ref.mounted) return;
+      if (state.bodyLoadSerial != serial) return;
+      state = state.copyWith(bodyLoading: false);
     }
   }
 
   /// Saves an edited entry; [body] only when it should be rewritten.
   Future<void> update(LibraryEntry entry, {String? body}) async {
-    final result = await _ensureRepository().update(entry, body: body);
-    if (!ref.mounted) return;
-    state = _replaced(result);
+    try {
+      final result = await _ensureRepository().update(entry, body: body);
+      if (!ref.mounted) return;
+      state = _replaced(result);
+    } catch (error, stackTrace) {
+      Crash.error(error, stackTrace);
+    }
   }
 
   Future<void> delete(LibraryEntry entry) async {
-    final result = await _ensureRepository().delete(entry);
-    if (!ref.mounted) return;
-    state = switch (result) {
-      Ok() => state.copyWith(
-        entries: [
-          for (final e in state.entries)
-            if (e.itemId != entry.itemId) e,
-        ],
-      ),
-      Err(:final failure) => _failed(state, failure),
-    };
+    try {
+      final result = await _ensureRepository().delete(entry);
+      if (!ref.mounted) return;
+      state = switch (result) {
+        Ok() => state.copyWith(
+          entries: [
+            for (final e in state.entries)
+              if (e.itemId != entry.itemId) e,
+          ],
+        ),
+        Err(:final failure) => _failed(state, failure),
+      };
+    } catch (error, stackTrace) {
+      Crash.error(error, stackTrace);
+    }
   }
 
   void search(String query) => state = state.copyWith(query: query);
@@ -85,5 +123,5 @@ class LibraryNotifier extends _$LibraryNotifier {
   };
 
   static LibraryState _failed(LibraryState s, NotionFailure failure) =>
-      s.copyWith(failure: failure, failureSerial: s.failureSerial + 1);
+      s.copyWith(failure: failure, cacheRefreshFailed: false, failureSerial: s.failureSerial + 1);
 }

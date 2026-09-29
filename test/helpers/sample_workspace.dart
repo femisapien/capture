@@ -8,11 +8,11 @@ import 'package:capture/features/library/domain/entities/library_entry.dart';
 import 'package:capture/features/library/repositories/library_repository.dart';
 import 'package:capture/features/settings/presentation/notifiers/settings_notifier.dart';
 import 'package:capture/features/settings/presentation/notifiers/settings_state.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'test_fakes.dart';
 
-/// A fully set-up, synthetic workspace: keys saved, Notion connected, model
-/// downloaded, with a few groups, saved entries and captures.
+/// All sample credentials and workspace content are synthetic.
 final sampleWorkspace = NotionWorkspace(
   parentPageId: .new('parent'),
   areaPageId: .new('area'),
@@ -23,21 +23,15 @@ final sampleWorkspace = NotionWorkspace(
 );
 
 /// Settings with everything in place; nothing is read from the Mac.
-class ReadySettings extends SettingsNotifier {
-  @override
-  SettingsState build() => super.build().copyWith(
-    workspace: sampleWorkspace,
-    hasNotionToken: true,
-    hasTypesafeKey: true,
-    modelReady: true,
-    loaded: true,
-    shortcutRegistered: true,
-    mic: .granted,
-  );
-
-  @override
-  Future<void> load() async {}
-}
+SettingsState readySettings(Ref ref, SettingsNotifier notifier) => notifier.build().copyWith(
+  workspace: sampleWorkspace,
+  hasNotionToken: true,
+  hasTypesafeKey: true,
+  modelReady: true,
+  loaded: true,
+  shortcutRegistered: true,
+  mic: .granted,
+);
 
 final sampleGroups = [
   Group(
@@ -167,7 +161,7 @@ final sampleSavedCapture = CaptureRecord(
   audioPath: .new('saved.m4a'),
   duration: const .new(seconds: 14),
   stage: .saved,
-  progress: const .new(markedSaved: true, audioAttached: true, remindersScheduled: {'2'}),
+  progress: .new(markedSaved: true, audioAttached: true, remindersScheduled: {.new('2')}),
   transcript: _transcript,
   items: [
     .new(

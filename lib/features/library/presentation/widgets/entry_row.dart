@@ -6,8 +6,6 @@ import 'package:capture/core/widgets/atoms/tap_surface.dart';
 import 'package:capture/features/library/domain/entities/library_entry.dart';
 import 'package:flutter/material.dart';
 
-/// One saved entry: a checkbox for a task or a page icon for a note, the
-/// title and an optional when/group [detail] line. Tapping opens it.
 class EntryRow extends StatelessWidget {
   const EntryRow({
     required this.entry,
@@ -52,7 +50,8 @@ class EntryRow extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: .start,
                   children: [
-                    Text(entry.title ?? '', style: context.textTheme.bodyMedium),
+                    if (entry.title case final String title)
+                      Text(title, style: context.textTheme.bodyMedium),
                     if (detail case final String d) Text(d, style: context.textTheme.labelMedium),
                   ],
                 ),

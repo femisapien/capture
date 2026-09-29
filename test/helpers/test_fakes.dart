@@ -21,8 +21,7 @@ class FakeSecrets implements ISecretsLocalDatasource {
 /// A notification's text.
 typedef ShownNotification = ({String title, String body});
 
-/// Notifications that are never shown; records what would have been shown
-/// and whether all were cancelled.
+/// Record notification requests without contacting native notification services.
 class FakeReminders implements IReminderDatasource {
   bool cancelledAll = false;
 
@@ -36,7 +35,7 @@ class FakeReminders implements IReminderDatasource {
   @override
   Future<bool> schedule({
     required String itemId,
-    required String title,
+    required String? title,
     required tz.TZDateTime at,
   }) async => true;
 
@@ -47,8 +46,6 @@ class FakeReminders implements IReminderDatasource {
   Future<void> cancelAll() async => cancelledAll = true;
 }
 
-/// Fixed clock (2026-09-17 19:09 UTC, Europe/London) and sequential ids:
-/// `item-1`, `item-2`, …
 class FakeSystem implements ISystemDatasource {
   FakeSystem({this.isPhone = false});
 
