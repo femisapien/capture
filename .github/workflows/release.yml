@@ -68,7 +68,7 @@ jobs:
             ${{ runner.temp }}/hard-eng-tools/pnpm/store
           key: ${{ runner.os }}-${{ runner.arch }}-hard-eng-tools-v2-${{ steps.impact.outputs.tools || 'all' }}-${{ env.EXTRA_SDK_TOOLS }}-${{ hashFiles('.github/workflows/release.yml', '.hooks/tool_setup.py', 'hard-eng.gates.json', '**/pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-hard-eng-tools-v2-${{ steps.impact.outputs.tools || 'all' }}-${{ env.EXTRA_SDK_TOOLS }}-
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           version: latest
           runtime: node@latest
@@ -176,7 +176,7 @@ jobs:
         if: needs.changes.outputs.app == 'true'
         with:
           persist-credentials: false
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         if: needs.changes.outputs.app == 'true'
         with:
           version: latest
@@ -213,7 +213,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           version: latest
           runtime: node@latest
